@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         39th War Room
 // @namespace    eaglewing.torn.39th.warroom
-// @version      1.11.1
+// @version      1.11.2
 // @description  39th factions only. Opened from a button on your faction page. Ranked war overview: enemy members by status with hospital timers, who is out next, both chains to the second, dibs, and an optional chain-timeout alert. Names are plain links to attack pages that you click yourself.
 // @author       Eaglewing [571041]
 // @match        https://www.torn.com/*
@@ -14,6 +14,9 @@
 // @grant        GM_addStyle
 // @connect      api.torn.com
 // @connect      ultimata.net
+// @homepageURL  https://github.com/Eaglewing91/39th-War-Room
+// @updateURL    https://raw.githubusercontent.com/Eaglewing91/39th-War-Room/main/39th-War-Room.user.js
+// @downloadURL  https://raw.githubusercontent.com/Eaglewing91/39th-War-Room/main/39th-War-Room.user.js
 // @license      GPL-3.0-or-later
 // ==/UserScript==
 

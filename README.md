@@ -17,7 +17,7 @@ It opens from a **39th War Room** bar on your own faction page, under Torn's war
 ## Install
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/).
-2. Open `39th-War-Room.user.js` in this repository, choose **Raw**, and let Tampermonkey install it.
+2. Open the [install link](https://raw.githubusercontent.com/Eaglewing91/39th-War-Room/main/39th-War-Room.user.js) and let Tampermonkey install it. Tampermonkey will offer new versions from here.
 3. On your faction page, press **39th War Room**, press **Key**, and save a Torn API key. A **Public** key is enough.
 4. Press **Site**, then **Turn on**, to use the 39th site. You must be logged in to [ultimata.net](https://ultimata.net/) in the same browser.
 
