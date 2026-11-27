@@ -4,6 +4,8 @@ A Tampermonkey userscript for Torn, for members of the 39th factions only.
 
 It opens from a **39th War Room** bar on your own faction page, under Torn's war list, and stays open as you move around Torn until you close it.
 
+Press **Own window** in its header to move it into a small browser window of its own. That window never changes page, so War Room stays up, without reloading, while you play Torn in your main window.
+
 ## What it shows
 
 - Enemy members by status, with hospital and jail timers that follow Torn's clock

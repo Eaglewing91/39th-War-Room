@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         39th War Room
 // @namespace    eaglewing.torn.39th.warroom
-// @version      1.11.2
+// @version      1.12.1
 // @description  39th factions only. Opened from a button on your faction page. Ranked war overview: enemy members by status with hospital timers, who is out next, both chains to the second, dibs, and an optional chain-timeout alert. Names are plain links to attack pages that you click yourself.
 // @author       Eaglewing [571041]
 // @match        https://www.torn.com/*
@@ -42,6 +42,8 @@
  *   the war list (to find the current war), that war's data (members, spies, dibs, dibs limit, assigned targets),
  *   your own spy entry (for fair fight) and your target groups. No other site can be contacted, and no Torn API key
  *   is sent there.
+ * - Own window: the "Own window" button opens your faction page in a separate small browser window (your click, one
+ *   page load) and War Room fills it. That window never changes page, so War Room stays up while you play in the other.
  * - Alerts (your switch): a notification when a target you dibbed leaves hospital, and when several enemies leave
  *   hospital early in a short time. Worked out from data already loaded; no extra requests. Clicking the dibbed-target
  *   notification opens that attack page (your click, one page load).
@@ -55,6 +57,8 @@
 'use strict';
 if (window.top !== window.self || window.__warRoom39) return;
 window.__warRoom39 = true;
+// Own-window mode: this browser window was opened by the "Own window" button to hold War Room and nothing else.
+const POP_NAME = 'wr39popout', POPOUT = window.name === POP_NAME;
 
 /* ---------- small engine: key, Torn API with a shared per-minute budget, timers, window ---------- */
 const now = () => Date.now();
@@ -103,7 +107,7 @@ function api(path, params, opt) {
 // Runs fn now and then every `ms` while this tab is visible.
 const every = (ms, fn) => {
   let t = null, stopped = false, last = 0;
-  const run = () => { if (stopped) return; clearTimeout(t); if (!document.hidden) { last = now(); try { fn(); } catch (e) { console.warn('[39th War Room]', e); } } t = setTimeout(run, ms); };
+  const run = () => { if (stopped) return; clearTimeout(t); if (!document.hidden || POPOUT) { last = now(); try { fn(); } catch (e) { console.warn('[39th War Room]', e); } } t = setTimeout(run, ms); };
   const vis = () => { if (!document.hidden && now() - last >= ms) run(); };
   document.addEventListener('visibilitychange', vis);
   run();
@@ -160,21 +164,23 @@ GM_addStyle(`.wr39w,#wr39-open{--wr39-bg:#111113;--wr39-s1:#18181b;--wr39-s2:#20
     @media (max-width:640px){.wr39w{right:0;left:0;top:auto;bottom:0;width:100vw;max-height:80vh;border-radius:var(--wr39-r) var(--wr39-r) 0 0}}
   
   .wr39w .pill.good{background:var(--wr39-good-soft);color:var(--wr39-good) !important}.wr39w .pill.warn{background:var(--wr39-warn-soft);color:var(--wr39-warn) !important}
-  .wr39w .tw-k{margin-left:auto}.wr39w .tw-k + .tw-x{margin-left:0}
+  .wr39w .tw-p{margin-left:auto}.wr39w .tw-p + .tw-k{margin-left:0}.wr39w .tw-k{margin-left:auto}.wr39w .tw-k + .tw-x{margin-left:0}
+  .wr39w.pop{box-sizing:border-box;left:0 !important;top:0 !important;right:0 !important;bottom:0 !important;width:100vw !important;height:100vh;max-height:100vh !important;border-radius:0;border-left:0;border-right:0;z-index:2147483647}.wr39w.pop .tw-hd{cursor:default}
   .wr39w .tw-key{display:none;padding:10px 12px;border-bottom:1px solid var(--wr39-line);background:var(--wr39-s1)}.wr39w .tw-key.open{display:block}
   .wr39w .tw-key input{flex:1;min-width:0}
   #wr39-open{clear:both;display:block;width:100%;margin:10px 0;padding:9px 12px;box-sizing:border-box;border:1px solid var(--wr39-line);border-left:3px solid var(--wr39-accent-fill);border-radius:var(--wr39-r2);background:var(--wr39-s1);color:var(--wr39-text);font:600 13.5px/1.3 var(--wr39-font);text-align:left;cursor:pointer}
   #wr39-open:hover{border-color:var(--wr39-accent)}#wr39-open.on{background:var(--wr39-s3)}`);
 function makeWindow(id, title, sub) {
   const el = document.createElement('div'); el.id = 'wr39w-' + id; el.className = 'wr39w'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', title);
-  el.innerHTML = `<div class="tw-hd"><span class="tw-t">${esc(title)}</span><span class="tw-s">${esc(sub || '')}</span><button type="button" class="b tw-k">Key</button><button type="button" class="tw-x" aria-label="Close">✕</button></div>
+  el.innerHTML = `<div class="tw-hd"><span class="tw-t">${esc(title)}</span><span class="tw-s">${esc(sub || '')}</span>${POPOUT ? '' : '<button type="button" class="b tw-p" title="Open in its own window, so it stays up while you change Torn pages">Own window</button>'}<button type="button" class="b tw-k">Key</button><button type="button" class="tw-x" aria-label="Close">✕</button></div>
     <div class="tw-key"><div class="row" style="flex-wrap:nowrap"><input type="password" autocomplete="off" placeholder="Torn API key (Public)" aria-label="Torn API key"><button type="button" class="b pri" data-k="save">Save</button><button type="button" class="b" data-k="clear">Remove</button></div>
     <div class="note" style="margin:6px 0 0">Kept on this device. Used only for the Torn API.</div></div><div class="tw-bd"></div>`;
   (document.body || document.documentElement).appendChild(el);
-  const pos = GM_getValue('winpos', null);
+  const pos = POPOUT ? null : GM_getValue('winpos', null);
+  if (POPOUT) el.classList.add('pop');
   if (pos && window.innerWidth > 640) { el.style.left = Math.max(0, Math.min(window.innerWidth - 80, pos.x)) + 'px'; el.style.top = Math.max(0, Math.min(window.innerHeight - 60, pos.y)) + 'px'; el.style.right = 'auto'; }
   el.querySelector('.tw-hd').addEventListener('pointerdown', (e) => {
-    if (e.target.closest('button') || window.innerWidth <= 640) return;
+    if (POPOUT || e.target.closest('button') || window.innerWidth <= 640) return;
     const r = el.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
     const mv = (ev) => { el.style.left = Math.max(0, Math.min(window.innerWidth - 80, ev.clientX - dx)) + 'px'; el.style.top = Math.max(0, Math.min(window.innerHeight - 40, ev.clientY - dy)) + 'px'; el.style.right = 'auto'; };
     const up = () => { document.removeEventListener('pointermove', mv); document.removeEventListener('pointerup', up); const rr = el.getBoundingClientRect(); GM_setValue('winpos', { x: Math.round(rr.left), y: Math.round(rr.top) }); };
@@ -184,12 +190,14 @@ function makeWindow(id, title, sub) {
   const w = {
     el, body,
     isOpen: () => el.classList.contains('open'),
-    open() { el.classList.add('open'); GM_setValue('winopen', true); if (!GM_getValue('api_key', '')) keyBox.classList.add('open'); w.onopen && w.onopen(); },
-    close() { el.classList.remove('open'); GM_setValue('winopen', false); w.onclose && w.onclose(); },
+    open() { el.classList.add('open'); if (!POPOUT) GM_setValue('winopen', true); if (!GM_getValue('api_key', '')) keyBox.classList.add('open'); w.onopen && w.onopen(); },
+    close() { el.classList.remove('open'); if (!POPOUT) GM_setValue('winopen', false); w.onclose && w.onclose(); },
     wasOpen: () => !!GM_getValue('winopen', false),
     set(html) { body.innerHTML = html; },
   };
-  el.querySelector('.tw-x').onclick = () => w.close();
+  el.querySelector('.tw-x').onclick = () => { if (POPOUT) { try { GM_setValue('popAt', 0); } catch (e) {} window.close(); } else w.close(); };
+  // Your click opens your faction page in a small window of its own; War Room fills that window and this one is closed here.
+  if (!POPOUT) el.querySelector('.tw-p').onclick = (e) => { if (!e.isTrusted) return; const win = window.open('https://www.torn.com/factions.php?step=your&type=1', POP_NAME, 'popup=yes,width=580,height=900'); if (win) w.close(); };
   el.querySelector('.tw-k').onclick = () => keyBox.classList.toggle('open');
   keyBox.addEventListener('click', (e) => {
     const b = e.target.closest('[data-k]'); if (!b) return; const inp = keyBox.querySelector('input');
@@ -437,7 +445,7 @@ function watchOuts(members, enemyId) {
   if (watchOuts.enemy !== enemyId) { seen.clear(); outs = []; watchOuts.enemy = enemyId; }   // a different faction: start afresh
   const first = !seen.size, n = nowS(), dibs = siteLive() ? feed.dibs : null;
   for (const m of members) {
-    const was = seen.get(m.id), hosp = stateOf(m) === 'hospital', until = Number(m.status && m.status.until) || 0;
+    const was = seen.get(m.id), hosp = stateOf(m) === 'hospital' && !abroadHosp(m), until = Number(m.status && m.status.until) || 0;
     if (!first && was && was.hosp && !hosp) {
       const early = was.until - n > 3;
       if (early) outs.push({ t: Date.now(), id: m.id, name: m.name });
@@ -531,8 +539,11 @@ async function load() {
 
 const stateOf = (m) => String((m.status && m.status.state) || 'Okay').toLowerCase();
 const online = (m) => String((m.last_action && m.last_action.status) || '').toLowerCase();
+// In a hospital in another country ("In a Swiss hospital for 20 mins"): not in Torn, so not a target when the timer ends.
+const abroadHosp = (m) => stateOf(m) === 'hospital' && /^in an? .+ hospital/i.test(String((m.status && m.status.description) || '').trim());
 function group(m) {
   const s = stateOf(m);
+  if (abroadHosp(m)) return 'travel';
   if ((s === 'hospital' || s === 'jail') && Number(m.status && m.status.until) > 0 && Number(m.status.until) <= nowS()) return 'okay';   // timer ran out: free now
   if (s === 'okay') return 'okay';
   if (s === 'hospital') return 'hospital';
@@ -568,7 +579,8 @@ function pill(m) {
   if (g === 'okay') return '<span class="pill ok">Okay</span>';
   if (g === 'hospital') return `<span class="pill hosp">Hosp ${left}</span>`;
   if (g === 'jail') return `<span class="pill jail">Jail ${left}</span>`;
-  if (g === 'travel') return `<span class="pill trav" title="${esc(m.status.description || '')}">${esc(trip(m.status.description))}</span>`;
+  if (g === 'travel' && abroadHosp(m)) return `<span class="pill trav" title="${esc(m.status.description || '')}">Hosp abroad ${left}</span>`;
+  if (g === 'travel') return `<span class="pill trav" title=""${esc(m.status.description || '')}">${esc(trip(m.status.description))}</span>`;
   return `<span class="pill">${esc((m.status && m.status.state) || '?')}</span>`;
 }
 const atk = (m) => `<a href="https://www.torn.com/page.php?sid=attack&amp;user2ID=${encodeURIComponent(m.id)}" title="Open attack page">${esc(m.name || m.id)}</a>`;
@@ -754,6 +766,7 @@ tucc.menu('Open War Room', () => w.open());
 const btn = document.createElement('button'); btn.id = 'wr39-open'; btn.type = 'button'; btn.textContent = '39th War Room';
 btn.onclick = () => (w.isOpen() ? w.close() : w.open());
 const place = () => {
+  if (POPOUT) return;
   btn.classList.toggle('on', w.isOpen());
   if (btn.isConnected || location.pathname !== '/factions.php' || !/[?&]step=your\b/.test(location.search)) return;
   const at = document.querySelector('#faction_war_list_id') || document.querySelector('#faction-main .f-war-list') || document.querySelector('#faction-main .f-msg');
@@ -782,5 +795,12 @@ function loadSnap() {
   (p.seen || []).forEach(([k, v]) => seen.set(k, v)); outs = Array.isArray(p.outs) ? p.outs : []; watchOuts.enemy = p.watching;
   return Number(p.scroll) || 0;
 }
-if (w.wasOpen()) { const sc = loadSnap(); w.open(); if (sc) w.body.scrollTop = sc; }
+// While War Room has its own window, that window says so every few seconds; other Torn pages then leave theirs closed.
+const popLive = () => Date.now() - Number(GM_getValue('popAt', 0) || 0) < 12000;
+if (POPOUT) {
+  const beat = () => { try { GM_setValue('popAt', Date.now()); } catch (e) {} }; beat(); setInterval(beat, 4000);
+  window.addEventListener('pagehide', () => { try { GM_setValue('popAt', 0); } catch (e) {} });
+  try { document.title = '39th War Room'; } catch (e) {}
+  loadSnap(); w.open();
+} else if (w.wasOpen() && !popLive()) { const sc = loadSnap(); w.open(); if (sc) w.body.scrollTop = sc; }
 })();
