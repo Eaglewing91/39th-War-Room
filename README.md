@@ -9,9 +9,9 @@ Press **Own window** in its header to move it into a small browser window of its
 ## What it shows
 
 - Enemy members by status, with hospital and jail timers that follow Torn's clock
-- **Out of hospital next**: the five soonest, in time order
+- **Out of hospital next**: everyone in a Torn hospital, soonest out first
 - Both chains, the war score and the target
-- Dibs from the 39th site, with your dibs limit
+- Dibs from the 39th site, with your dibs limit, a timer on every dib, and **R** to refresh one you hold
 - Battle stats from the site's spies or from Battle Stats Predictor (your choice), and fair fight
 - Targets assigned to you, and who has revives on
 - Alerts: a dibbed target leaving hospital, several enemies leaving hospital early (push warning), and an optional chain-timeout alert

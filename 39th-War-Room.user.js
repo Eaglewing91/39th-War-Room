@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         39th War Room
 // @namespace    eaglewing.torn.39th.warroom
-// @version      1.12.1
+// @version      1.12.4
 // @description  39th factions only. Opened from a button on your faction page. Ranked war overview: enemy members by status with hospital timers, who is out next, both chains to the second, dibs, and an optional chain-timeout alert. Names are plain links to attack pages that you click yourself.
 // @author       Eaglewing [571041]
 // @match        https://www.torn.com/*
@@ -51,6 +51,8 @@
  *   device. BSP's data is only read; no request is made for it and its key is never read.
  *   BSP's terms: https://www.torn.com/forums.php#/p=threads&f=67&t=16290324
  * - Dib / Undib: one real press sends one dib message to ultimata.net. Scripted presses are ignored.
+ * - R (refresh a dib you hold): one real press releases the dib and takes it again, two dib messages to ultimata.net.
+ *   The second is sent only after the site confirms the first.
  */
 
 (function () {
@@ -333,7 +335,7 @@ async function findWar(me, enemy) {
 // Dibs limits and assigned targets carried in the war data.
 function siteExtras(j) {
   const a = (j && j.war && typeof j.war === 'object' && j.war) || {};
-  feed.rules = { mine: Number(a.max_dibs_one_person) || 0, per: Number(a.max_dibs) || 0 };
+  feed.rules = { mine: Number(a.max_dibs_one_person) || 0, per: Number(a.max_dibs) || 0, expire: Number(a.auto_undibs) || 0 };   // expire: seconds before the site drops a dib
   feed.push = { n: Number(a.medout_alert_count) || 0, secs: Number(a.medout_alert_window_seconds) || 0 };   // the site's own "several out early" setting for this war
   feed.assigned = (Array.isArray(a.wars_assigned_targets) ? a.wars_assigned_targets : []).slice(0, 500).map((x) => ({ t: Number(x && x.target_id) || 0, p: Number(x && x.player_id) || 0 })).filter((x) => x.t && x.p);
 }
@@ -377,13 +379,13 @@ function seekDibs(o, depth) {
 function feedDibs(list) {
   const out = {};
   for (const d of (list || []).slice(0, 500)) {
-    if (!d || typeof d !== 'object') continue;
+    if (!d || typeof d !== 'object' || d.expired === true) continue;   // a dib the site has already timed out is not a dib
     const tgt = Number(pick(d, ['target_id', 'targetId', 'target', 'targetid', 'dibbed_id', 'dibbedId', 'enemy_id', 'enemyId', 'victim_id', 'player_id', 'playerId', 'XID']));
     if (!(tgt > 0)) continue;
     let who = pick(d, ['dibser_name', 'dibserName', 'dibser', 'by_name', 'byName', 'player_name', 'playername', 'username', 'user_name', 'name']);
     if (typeof who !== 'string' && d.player) { try { const q = typeof d.player === 'string' ? JSON.parse(d.player) : d.player; if (q && typeof q.name === 'string') who = q.name; } catch (e) {} }
     const by = Number(pick(d, ['dibser_id', 'dibserId', 'by_id', 'byId', 'by', 'user_id', 'userId'].concat(d.target_id != null || d.targetId != null ? ['player_id', 'playerId'] : []))) || 0;
-    (out[tgt] = out[tgt] || []).push({ name: typeof who === 'string' ? who.slice(0, 30) : '', by });
+    (out[tgt] = out[tgt] || []).push({ name: typeof who === 'string' ? who.slice(0, 30) : '', by, at: Date.parse(pick(d, ['dibsed_at', 'dibsedAt', 'created_at', 'createdAt']) || '') || 0 });
   }
   return out;
 }
@@ -397,7 +399,7 @@ const siteReq = (method, url, body, ms) => new Promise((resolve, reject) => {
 });
 const siteRoom = () => siteId();
 let dibBusy = false;
-async function siteDib(id, name) {
+async function siteDib(id, name, again) {
   const room = siteRoom(), origin = 'https://' + SITE;
   if (!room) throw new Error('No war found on the site.');
   const at = () => origin + '/socket.io/?EIO=4&transport=polling&t=' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -418,15 +420,28 @@ async function siteDib(id, name) {
   // Join the war first and give the site a moment to recognise you, then send the dib on its own.
   await siteReq('POST', u(), '42' + ch + JSON.stringify(['join-war-room', room]));
   await siteReq('GET', u(), null, 900).catch(() => '');
-  await siteReq('POST', u(), '42' + ch + JSON.stringify(['dibs', Number(id), String(name), room]));
-  // Listen briefly for the site's own "dibs" notice: it confirms the dib and carries the fresh list.
-  let heard = false; const until = Date.now() + 3500;
-  while (!heard && Date.now() < until) {
-    const got = await siteReq('GET', u(), null, Math.max(300, until - Date.now())).catch(() => '');
-    if (!got) break;
-    for (const pk of got.split('\x1e')) { if (!pk.startsWith('42' + ch + '["dibs"')) continue; heard = true; try { const a = JSON.parse(pk.slice(2 + ch.length)); if (Array.isArray(a[1])) feed.dibs = feedDibs(a[1]); } catch (e) {} }
-  }
-  siteReq('POST', u(), '41' + ch, 3000).catch(() => '').then(() => siteReq('POST', u(), '1', 3000).catch(() => ''));   // hang up
+  // Send one dib message, then listen briefly for the site's own "dibs" notice: it confirms it and carries the fresh list.
+  const sendDib = async (ms) => {
+    await siteReq('POST', u(), '42' + ch + JSON.stringify(['dibs', Number(id), String(name), room]));
+    let ok = false; const until = Date.now() + ms;
+    while (!ok && Date.now() < until) {
+      const got = await siteReq('GET', u(), null, Math.max(300, until - Date.now())).catch(() => '');
+      if (!got) break;
+      for (const pk of got.split('\x1e')) { if (!pk.startsWith('42' + ch + '["dibs"')) continue; ok = true; try { const a = JSON.parse(pk.slice(2 + ch.length)); if (Array.isArray(a[1])) feed.dibs = feedDibs(a[1]); } catch (e) {} }
+    }
+    return ok;
+  };
+  const hangUp = () => siteReq('POST', u(), '41' + ch, 3000).catch(() => '').then(() => siteReq('POST', u(), '1', 3000).catch(() => ''));
+  let heard;
+  if (again) {
+    // Refresh: release, wait for the site to confirm, then take it again. If the release is not confirmed, stop there.
+    const mine = () => !!(feed.dibs && feed.dibs[id] && feed.dibs[id].some((x) => x.by === myId));
+    if (!(await sendDib(2500))) { hangUp(); throw new Error('Not confirmed by the site. Check your dib.'); }
+    if (mine()) { hangUp(); throw new Error('The site kept the dib as it was.'); }
+    heard = await sendDib(3500);
+    if (heard && !mine()) { hangUp(); throw new Error('Refresh failed. Dib again.'); }
+  } else heard = await sendDib(3500);
+  hangUp();
   return heard;
 }
 let myId = 0;
@@ -622,15 +637,15 @@ function render() {
   if (feed.open) html += `<div class="card"><div class="row"><input type="text" data-feedurl value="${esc(feedOk(S.feedUrl) && warIdOf(S.feedUrl) ? warIdOf(S.feedUrl) : '')}" placeholder="War number (blank = current war)" inputmode="numeric" style="flex:1 1 200px"><button type="button" class="b pri" data-act="feedsave">${S.site ? 'Save' : 'Turn on'}</button>${S.site ? '<button type="button" class="b" data-act="feedclear">Turn off</button>' : ''}</div>${feed.urlErr || (S.site && feed.error) ? `<div class="note bad">${esc(feed.urlErr || feed.error)}</div>` : feedOn() && feed.live ? `<div class="note good">War ${siteId()} · ${feed.found} members</div>` : ''}<div class="note" style="margin-bottom:0"><a href="https://${SITE}/" target="_blank" rel="noopener">${SITE}</a></div></div>`;
   if (d.enemy) {
     const ms = d.members;
-    const next = ms.filter((m) => group(m) === 'hospital' && Number(m.status.until) > nowS()).sort((a, b) => a.status.until - b.status.until).slice(0, 5);
+    const next = ms.filter((m) => group(m) === 'hospital' && Number(m.status.until) > nowS()).sort((a, b) => a.status.until - b.status.until);   // everyone in a Torn hospital, soonest out first
     const counts = { okay: 0, hospital: 0, travel: 0, jail: 0, online: 0 };
     ms.forEach((m) => { counts[group(m)] = (counts[group(m)] || 0) + 1; if (online(m) === 'online') counts.online++; });
     const live = feedOn() && feed.live, dibs = live ? feed.dibs : null;
-    const rules = (live && feed.rules) || { mine: 0, per: 0 }, mineN = dibs && myId ? Object.keys(dibs).filter((k) => dibs[k].some((x) => x.by === myId)).length : 0, capped = rules.mine > 0 && mineN >= rules.mine;
+    const rules = (live && feed.rules) || { mine: 0, per: 0, expire: 0 }, mineN = dibs && myId ? Object.keys(dibs).filter((k) => dibs[k].some((x) => x.by === myId)).length : 0, capped = rules.mine > 0 && mineN >= rules.mine;
     const yours = live ? myTargets() : new Set();
     if (yours.size) { filters.push(['mine', 'Mine']); counts.mine = yours.size; }
     const dibBtn = (m, label) => `<button type="button" class="b" data-act="dib" data-id="${esc(m.id)}" data-name="${esc(m.name || '')}"${dibBusy || (label === 'Dib' && capped) ? ' disabled' : ''}${label === 'Dib' && capped ? ' title="Dibs limit reached"' : ''}>${label}</button>`;
-    const dibCell = (m) => { const d = dibs[m.id]; if (!d) return dibBtn(m, 'Dib'); const mine = myId && d.some((x) => x.by === myId); return `<span class="pill ${mine ? 'good' : 'warn'}">${esc(d.map((x) => x.name || (x.by ? '#' + x.by : 'Dibbed')).join(', '))}</span>${mine ? ' ' + dibBtn(m, 'Undib') : rules.per > d.length ? ' ' + dibBtn(m, 'Dib') : ''}`; };
+    const dibCell = (m) => { const d = dibs[m.id]; if (!d) return dibBtn(m, 'Dib'); const mine = myId && d.some((x) => x.by === myId); const ends = rules.expire ? d.filter((x) => x.at).map((x) => Math.floor(x.at / 1000) + rules.expire).sort((a, b) => a - b)[0] : 0, left = ends ? ends - nowS() : 0; return `<span class="pill ${mine ? 'good' : 'warn'}">${esc(d.map((x) => x.name || (x.by ? '#' + x.by : 'Dibbed')).join(', '))}</span>${ends ? ` <span data-left="${ends}" data-clock title="Time before this dib lapses" class="${left < 60 ? 'bad' : 'muted'}">${left > 0 ? Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0') : '0:00'}</span>` : ''}${mine ? ' ' + dibBtn(m, 'Undib') + ` <button type="button" class="b" data-act="dib" data-again="1" data-id="${esc(m.id)}" data-name="${esc(m.name || '')}" title="Refresh this dib (release and take again)"${dibBusy ? ' disabled' : ''}>R</button>` : rules.per > d.length ? ' ' + dibBtn(m, 'Dib') : ''}`; };
     const tag = (m) => `${m.rev ? ' <span class="good" title="Revives on" style="font-size:15px;line-height:1">♥</span>' : ''}${yours.has(m.id) ? ' <span class="pill good">Yours</span>' : ''}`;
     whoAmI();
     const nextUp = dibs && S.free ? next.filter((m) => !dibs[m.id]) : next;
@@ -680,7 +695,7 @@ function onClick(e) {
   if (a.dataset.act === 'dib') {
     if (!e.isTrusted || dibBusy || locked || !feedOn()) return;
     dibBusy = true; lastSig = ''; render();
-    siteDib(a.dataset.id, a.dataset.name).then((heard) => { feed.dibErr = heard ? '' : 'Sent, but the site did not confirm it.'; }, (err) => { feed.dibErr = err.message; })
+    siteDib(a.dataset.id, a.dataset.name, a.dataset.again === '1').then((heard) => { feed.dibErr = heard ? '' : 'Sent, but the site did not confirm it.'; }, (err) => { feed.dibErr = err.message; })
       .then(() => { dibBusy = false; feed.askedAt = 0; lastSig = ''; render(); setTimeout(() => { if (poll) poll.now(); }, 700); });
     return;
   }
@@ -711,7 +726,7 @@ setInterval(() => {
   const n = nowS();
   const ag = w.body.querySelector('[data-ago]'); if (ag && data.at) ag.textContent = fmt.ago(Math.floor(data.at / 1000));
   let freed = false;
-  w.body.querySelectorAll('[data-until],[data-left]').forEach((el) => { const t = Number(el.dataset.until || el.dataset.left); if (t > n) el.textContent = fmt.dur(t - n); else { el.textContent = 'now'; if (el.dataset.until) freed = true; } });
+  w.body.querySelectorAll('[data-until],[data-left]').forEach((el) => { const t = Number(el.dataset.until || el.dataset.left); if ('clock' in el.dataset) { const l = Math.max(0, t - n); el.textContent = Math.floor(l / 60) + ':' + String(l % 60).padStart(2, '0'); el.className = l < 60 ? 'bad' : 'muted'; } else if (t > n) el.textContent = fmt.dur(t - n); else { el.textContent = 'now'; if (el.dataset.until) freed = true; } });
   // How old the site's data is, once it is more than a few seconds.
   const ag2 = w.body.querySelector('[data-age]'); if (ag2 && feed.gotAt) { const old = Math.floor((Date.now() - feed.gotAt) / 1000); ag2.textContent = old >= 6 ? '● ' + old + 's old' : '● live'; ag2.className = old >= 6 ? 'warn' : 'good'; }
   if (!!w.body.querySelector('[data-push]') !== !!(data.enemy && pushNow())) freed = true;   // push warning appears or clears on time
